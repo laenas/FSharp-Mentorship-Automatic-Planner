@@ -1,8 +1,9 @@
-﻿module MentorMatchmaker.DomainOperations
+module MentorMatchmaker.DomainOperations
 
 open System.Linq
 
 open FSharpPlus.Data
+open FSharpPlus.Operators
 
 open Infra
 open Utilities
@@ -12,7 +13,8 @@ let checkForAvailabilityMatch mentorAvailability menteeAvailability hoursOfOverl
     let anyCommonSlot =
         List.intersect menteeAvailability.UtcHours mentorAvailability.UtcHours
         |> List.length >= hoursOfOverlap
-    mentorAvailability.WeekDayName.Equals(menteeAvailability.WeekDayName) && anyCommonSlot
+
+    mentorAvailability.Weekday.Equals(menteeAvailability.Weekday) && anyCommonSlot
 
 let doScheduleOverlap menteeSchedule mentorSchedule hoursOfOverlap=
     let menteeAvailabilities = menteeSchedule.AvailableDays |> NonEmptyList.toList
@@ -47,19 +49,17 @@ let tryFindSameAvailableHoursForApplicants menteeAvailableDay mentorAvailableDay
     if sameAvailableHours.Length = 0 then 
         None
     else 
-        Some { Weekday = menteeAvailableDay.WeekDayName; MatchedAvailablePeriods = NonEmptyList.create sameAvailableHours.Head sameAvailableHours.Tail }
+        Some { Weekday = menteeAvailableDay.Weekday; MatchedAvailablePeriods = NonEmptyList.create sameAvailableHours.Head sameAvailableHours.Tail }
 
 let generateMeetingTimes (mentorSchedule: CalendarSchedule) (menteeSchedule: CalendarSchedule) =
     let filterForSameWeekDay (availableDays1: DayAvailability nel) (availableDays2: DayAvailability nel) =
         let availabilitiesList1 = availableDays1 |> NonEmptyList.toList
         let availabilitiesList2 = availableDays2 |> NonEmptyList.toList
 
-        availabilitiesList1 |> List.filter(fun day -> availabilitiesList2 |> List.exists(fun x -> x.WeekDayName = day.WeekDayName))
+        availabilitiesList1 |> List.filter(fun day -> availabilitiesList2 |> List.exists(fun x -> x.Weekday = day.Weekday))
 
     let sortByWeekDayName nonEmptyAvailableDays =
-        nonEmptyAvailableDays
-        |> NonEmptyList.toList
-        |> List.sortBy(fun x -> x.WeekDayName)
+        sort nonEmptyAvailableDays
 
     let mentorAvailableDaysList, menteeAvailableDaysList =
         if mentorSchedule.AvailableDays.Length = menteeSchedule.AvailableDays.Length then
@@ -70,8 +70,8 @@ let generateMeetingTimes (mentorSchedule: CalendarSchedule) (menteeSchedule: Cal
             sortByWeekDayName (NonEmptyList.create mentorWeekSchedule.Head mentorWeekSchedule.Tail), sortByWeekDayName (NonEmptyList.create menteeWeekSchedule.Head menteeWeekSchedule.Tail)
 
     (mentorAvailableDaysList, menteeAvailableDaysList)
-    ||> List.map2(fun mentorAvailabilitiesOfTheDay menteeAvailabilitiesOfTheDay -> tryFindSameAvailableHoursForApplicants mentorAvailabilitiesOfTheDay menteeAvailabilitiesOfTheDay)
-    |> List.chooseDefault
+    ||> NonEmptyList.map2Shortest (fun mentorAvailabilitiesOfTheDay menteeAvailabilitiesOfTheDay -> tryFindSameAvailableHoursForApplicants mentorAvailabilitiesOfTheDay menteeAvailabilitiesOfTheDay)
+    |> choose id
 
 let canMatchMenteesWithMentors listOfMentors listOfMentees hoursOfOverlap=
     listOfMentors
@@ -101,13 +101,13 @@ let rec createUniqueMentorshipMatches (collectingPairing: CollectingMentorshipPa
         let mentee = potentialMatch.Mentee
         let mentor = potentialMatch.Mentor
         let sessionHours = generateMeetingTimes mentee.MenteeInformation.MentorshipSchedule mentor.MentorInformation.MentorshipSchedule
-        if sessionHours.Length > 0 then
+        if Seq.length sessionHours > 0 then
             let confirmedMentoshipMatch = {
                 MatchedMentee = mentee
                 MatchedMentor = mentor
                 FsharpTopic = potentialMatch.MatchingFsharpInterests.Head
                 CouldMentorHandleMoreWork = confirmedMatches.Length + 1 = (mentor.SimultaneousMenteeCount |> int)
-                MeetingTimes = NonEmptyList.create sessionHours.Head sessionHours.Tail
+                MeetingTimes = NonEmptyList.ofSeq sessionHours 
             }
     
             let updatedCollectionPairing = {
@@ -211,7 +211,7 @@ module Matchmaking =
                 unmatchedApplicant.AvailableDays
                 |> NonEmptyList.map(fun day ->
                     let availableHours = day.UtcHours |> List.map(fun utc -> $"{utc.Hours}") |> String.concat " ,"
-                    $"{day.WeekDayName}: {availableHours}"
+                    $"{day.Weekday}: {availableHours}"
                 )
                 |> String.concat  ", "
 

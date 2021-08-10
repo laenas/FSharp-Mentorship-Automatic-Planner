@@ -4,10 +4,10 @@ open System
 
 open Utilities
 
-type DayAvailability = { WeekDayName: string; UtcHours: TimeSpan list }
+type DayAvailability = { Weekday: DayOfWeek; UtcHours: TimeSpan list }
 type CalendarSchedule = { AvailableDays: DayAvailability nel }
 type MentoringSession = { UtcStartTime: TimeSpan; UtcEndTime: TimeSpan }
-type OverlapSchedule = { Weekday: string; MatchedAvailablePeriods: MentoringSession nel }
+type OverlapSchedule = { Weekday: DayOfWeek; MatchedAvailablePeriods: MentoringSession nel }
 
 type PersonInformation =
     { Fullname: string
