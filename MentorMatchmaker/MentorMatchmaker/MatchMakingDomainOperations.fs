@@ -1,4 +1,4 @@
-module MentorMatchmaker.DomainOperations
+﻿module MentorMatchmaker.DomainOperations
 
 open System.Linq
 
@@ -9,50 +9,44 @@ open Infra
 open Utilities
 open DomainTypes
 
-let checkForAvailabilityMatch mentorAvailability menteeAvailability hoursOfOverlap =
-    let anyCommonSlot =
+let (|LessThan|_|) i l =
+    if List.length l < i then Some l else None
+
+let availabilityToOverlap (minimumOverlap:int) menteeAvailability mentorAvailability =
+    let overlap = 
         List.intersect menteeAvailability.UtcHours mentorAvailability.UtcHours
-        |> List.length >= hoursOfOverlap
+        |> List.toConsecutivePairs
+        |> List.filter(fun (previousHour, currentHour) -> previousHour.Hours + 1 = currentHour.Hours)
+        |> List.map(fun (previousHour, currentHour) -> { UtcStartTime = previousHour; UtcEndTime = currentHour })
 
-    mentorAvailability.Weekday.Equals(menteeAvailability.Weekday) && anyCommonSlot
+    match mentorAvailability.Weekday = menteeAvailability.Weekday,overlap with
+    | false, _
+    | true, LessThan minimumOverlap _ -> None
+    | _ -> Some { Weekday = mentorAvailability.Weekday; MatchedAvailablePeriods = NonEmptyList.ofList overlap }
 
-let doScheduleOverlap menteeSchedule mentorSchedule hoursOfOverlap=
-    let menteeAvailabilities = menteeSchedule.AvailableDays |> NonEmptyList.toList
-    let mentorAvailabilities = mentorSchedule.AvailableDays |> NonEmptyList.toList
-    
-    let anySlotBetweenApplicants menteeSchedule hoursOfOverlap=
-        List.exists(fun mentorSchedule -> checkForAvailabilityMatch menteeSchedule mentorSchedule hoursOfOverlap) mentorAvailabilities
-
-    List.exists(fun menteeSchedule -> anySlotBetweenApplicants menteeSchedule hoursOfOverlap) menteeAvailabilities
+let scheduleToOverlap menteeSchedule mentorSchedule minimumOverlap =    
+    (menteeSchedule.AvailableDays,mentorSchedule.AvailableDays)
+    ||> NonEmptyList.map2Shortest (availabilityToOverlap minimumOverlap)
+    |> NonEmptyList.toList
+    |> List.choose id
 
 let extractMatchingFsharpTopics (mentorFsharpTopics: FsharpTopic nel) (menteeFsharpTopics: FsharpTopic nel) =
     NonEmptyList.intersect mentorFsharpTopics menteeFsharpTopics
 
-let doesMenteeMatchMentorProfile (mentor: Mentor) (mentee: Mentee) (hoursOfOverlap: int)=
-    let foundScheduleOverlap = (mentee.MenteeInformation.MentorshipSchedule, mentor.MentorInformation.MentorshipSchedule, hoursOfOverlap) |||> doScheduleOverlap
-    let hasAnyMatchingInterest = (mentor.AreasOfExpertise, mentee.TopicsOfInterest) ||> extractMatchingFsharpTopics |> Seq.length > 0
+let tryMatch (minimumOverlap: int) (mentor: Mentor) (mentee: Mentee) =
+    let overlaps = (mentee.MenteeInformation.MentorshipSchedule, mentor.MentorInformation.MentorshipSchedule, minimumOverlap) |||> scheduleToOverlap
+    let matchingInterests = (mentor.AreasOfExpertise, mentee.TopicsOfInterest) ||> extractMatchingFsharpTopics
     
-    foundScheduleOverlap && hasAnyMatchingInterest
+    match overlaps,matchingInterests with
+    | [], _
+    | _, [] -> None
+    | _ -> Some { Mentor = mentor; Mentee = mentee; MatchingFsharpInterests = matchingInterests; Overlaps = overlaps }
 
-let findAllMatchingMenteesForMentor (mentor: Mentor) (mentees: Mentee list) (hoursOfOverlap: int) =
-    mentees 
-    |> List.filter(fun mentee -> doesMenteeMatchMentorProfile mentor mentee hoursOfOverlap)
-    |> List.map(fun mentee ->  { Mentor = mentor; Mentee = mentee; MatchingFsharpInterests = extractMatchingFsharpTopics mentee.TopicsOfInterest mentor.AreasOfExpertise } )
-
-let tryFindSameAvailableHoursForApplicants menteeAvailableDay mentorAvailableDay =
-    let sameAvailableHours =
-        List.intersect menteeAvailableDay.UtcHours mentorAvailableDay.UtcHours
-        |> List.toConsecutivePairs
-        |> List.filter(fun (previousHour, currentHour) -> previousHour.Hours + 1 = currentHour.Hours)
-        |> List.map(fun (previousHour, currentHour) -> { UtcStartTime = previousHour; UtcEndTime = currentHour })
-    
-    if sameAvailableHours.Length = 0 then 
-        None
-    else 
-        Some { Weekday = menteeAvailableDay.Weekday; MatchedAvailablePeriods = NonEmptyList.create sameAvailableHours.Head sameAvailableHours.Tail }
+let findPotentialMentees (mentees: Mentee list) (minimumOverlap: int) (mentor: Mentor) =
+    List.choose (tryMatch minimumOverlap mentor) mentees 
 
 let generateMeetingTimes (mentorSchedule: CalendarSchedule) (menteeSchedule: CalendarSchedule) =
-    let filterForSameWeekDay (availableDays1: DayAvailability nel) (availableDays2: DayAvailability nel) =
+    let filterForSameWeekDay (availableDays1: DayAvailability nel) (availableDays2: DayAvailability nel) =        
         let availabilitiesList1 = availableDays1 |> NonEmptyList.toList
         let availabilitiesList2 = availableDays2 |> NonEmptyList.toList
 
@@ -70,20 +64,12 @@ let generateMeetingTimes (mentorSchedule: CalendarSchedule) (menteeSchedule: Cal
             sortByWeekDayName (NonEmptyList.create mentorWeekSchedule.Head mentorWeekSchedule.Tail), sortByWeekDayName (NonEmptyList.create menteeWeekSchedule.Head menteeWeekSchedule.Tail)
 
     (mentorAvailableDaysList, menteeAvailableDaysList)
-    ||> NonEmptyList.map2Shortest (fun mentorAvailabilitiesOfTheDay menteeAvailabilitiesOfTheDay -> tryFindSameAvailableHoursForApplicants mentorAvailabilitiesOfTheDay menteeAvailabilitiesOfTheDay)
+    ||> NonEmptyList.map2Shortest (fun mentorAvailabilitiesOfTheDay menteeAvailabilitiesOfTheDay -> availabilityToOverlap mentorAvailabilitiesOfTheDay menteeAvailabilitiesOfTheDay)
     |> choose id
 
-let canMatchMenteesWithMentors listOfMentors listOfMentees hoursOfOverlap=
-    listOfMentors
-    |> List.exists(fun mentor ->
-        (mentor, listOfMentees, hoursOfOverlap)
-        |||> findAllMatchingMenteesForMentor
-        |> fun matches -> List.isNotEmpty matches)
-
-let findAllPotentialMentorshipMatches mentors mentees hoursOfOverlap =
+let findAllPotentialMentorshipMatches minimumOverlap mentors mentees =
     mentors 
-    |> List.map(fun mentor -> findAllMatchingMenteesForMentor mentor mentees hoursOfOverlap)
-    |> List.concat
+    |> List.collect (findPotentialMentees mentees minimumOverlap)
     |> List.map(fun mentorshipMatch -> 
         let orderedInterestBasedOnPopularity = mentorshipMatch.MatchingFsharpInterests |> List.sortByDescending(fun fsharpTopic -> fsharpTopic.PopularityWeight)
         { mentorshipMatch with MatchingFsharpInterests = orderedInterestBasedOnPopularity }

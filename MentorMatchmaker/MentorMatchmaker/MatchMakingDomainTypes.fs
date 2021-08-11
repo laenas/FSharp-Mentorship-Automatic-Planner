@@ -65,7 +65,8 @@ type Mentee =
 type PotentialMentorshipMatch =
     { Mentor: Mentor
       Mentee: Mentee
-      MatchingFsharpInterests: FsharpTopic list }
+      MatchingFsharpInterests: FsharpTopic list
+      Overlaps: OverlapSchedule list }
 
 type ConfirmedMentorshipApplication =
     { MatchedMentee: Mentee
